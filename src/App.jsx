@@ -42,6 +42,62 @@ const TYPOGRAPHY = {
 };
 
 // ============================================
+// SUPABASE CONFIG
+// ============================================
+
+const SUPABASE_URL = 'https://oraormhllnyoxqslfbry.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9yYW9ybWhsbG55b3hxc2xmYnJ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAyMzk1NjEsImV4cCI6MjA4NTgxNTU2MX0.Qnf8CEFTmv3W4Or9yUIVKNjeoWY5LQkO_ss9Ufd4twQ';
+
+// Helper to upload to Supabase
+const uploadToSupabase = async (file, metadata) => {
+  try {
+    const timestamp = Date.now();
+    const fileName = `${timestamp}_${file.name}`;
+    
+    // Upload file to storage
+    const uploadResponse = await fetch(
+      `${SUPABASE_URL}/storage/v1/object/documents/${fileName}`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'x-upsert': 'true',
+        },
+        body: file,
+      }
+    );
+
+    // Save metadata to database
+    const dbResponse = await fetch(
+      `${SUPABASE_URL}/rest/v1/uploads`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'apikey': SUPABASE_ANON_KEY,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({
+          file_name: fileName,
+          original_name: file.name,
+          document_type: metadata.documentType,
+          extracted_data: metadata.extractedData,
+          currency: metadata.currency,
+          created_at: new Date().toISOString(),
+        }),
+      }
+    );
+
+    console.log('File uploaded to Supabase:', fileName);
+    return { success: true, fileName };
+  } catch (error) {
+    console.error('Supabase upload error:', error);
+    return { success: false, error };
+  }
+};
+
+// ============================================
 // CURRENCY & COUNTRY CONFIGURATION
 // ============================================
 
@@ -464,6 +520,13 @@ Common patterns:
       setStep('collecting-info');
       setIsDetecting(false);
       
+      // Upload to Supabase
+      await uploadToSupabase(uploadedFile, {
+        documentType: detected.documentType,
+        extractedData: detected.extractedInfo,
+        currency: selectedCurrency,
+      });
+      
     } catch (error) {
       console.error('Detection error:', error);
       
@@ -501,6 +564,20 @@ Common patterns:
       
       setStep('collecting-info');
       setIsDetecting(false);
+      
+      // Upload to Supabase (fallback case)
+      await uploadToSupabase(uploadedFile, {
+        documentType: docType,
+        extractedData: { 
+          role: null, 
+          company: null, 
+          salary: null, 
+          salaryText: null,
+          location: null, 
+          yearsOfExperience: null 
+        },
+        currency: selectedCurrency,
+      });
     }
   };
 
