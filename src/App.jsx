@@ -29,12 +29,12 @@ const COLORS = {
 // SUPABASE CONFIG (Update these after setup)
 // ============================================
 
-const SUPABASE_URL = 'YOUR_SUPABASE_URL'; // e.g., https://xyz.supabase.co
-const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+const SUPABASE_URL = 'https://oraormhllnyoxqslfbry.supabase.co'; // e.g., https://xyz.supabase.co
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9yYW9ybWhsbG55b3hxc2xmYnJ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAyMzk1NjEsImV4cCI6MjA4NTgxNTU2MX0.Qnf8CEFTmv3W4Or9yUIVKNjeoWY5LQkO_ss9Ufd4twQ';
 
 // Helper to upload to Supabase
 const uploadToSupabase = async (file, metadata) => {
-  if (SUPABASE_URL === 'YOUR_SUPABASE_URL') {
+  if (SUPABASE_URL === 'https://oraormhllnyoxqslfbry.supabase.co') {
     console.log('Supabase not configured, skipping upload');
     return null;
   }
