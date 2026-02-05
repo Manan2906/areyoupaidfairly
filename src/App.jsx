@@ -1549,7 +1549,7 @@ const PaymentModal = ({ amount, countryInfo, onClose, onSuccess }) => {
 
     // Initialize Razorpay
     const options = {
-      key: 'rzp_test_YOUR_KEY_HERE', // Replace with your Razorpay key
+      key: 'rzp_live_SCKaoNd6zMGEwJ', // Replace with your Razorpay key
       amount: amount * 100, // Amount in paise
       currency: 'INR',
       name: 'AreYouPaidFairly',
