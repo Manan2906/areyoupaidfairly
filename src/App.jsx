@@ -441,6 +441,7 @@ const HeroWithUpload = ({ onAnalysisComplete }) => {
 1. Document type (offer_letter, salary_slip, or resume)
 2. Country/region (detect from currency symbols: ₹/INR→India, $→US, £→UK, €→EU, ¥→Japan, etc.)
 3. Extract any visible information
+4. Calculate years from work experience dates
 
 Respond ONLY with valid JSON (no markdown):
 {
