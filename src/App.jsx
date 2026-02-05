@@ -1488,118 +1488,382 @@ RESPOND ONLY WITH VALID JSON.`;
         </div>
       </div>
 
-      {/* Negotiation Potential - Locked */}
-      <div style={{
-        position: 'relative',
-        background: `linear-gradient(135deg, ${COLORS.primary}15 0%, ${COLORS.success}15 100%)`,
-        border: `1px solid ${COLORS.border}`,
-        borderRadius: '16px',
-        padding: '32px',
-        overflow: 'hidden',
+{/* AI-Powered Services - 3 Plans + Bundle */}
+<div style={{
+  background: COLORS.bgCard,
+  border: `1px solid ${COLORS.border}`,
+  borderRadius: '16px',
+  padding: '48px 32px',
+  marginBottom: '32px',
+}}>
+  <div style={{ textAlign: 'center', marginBottom: '40px' }}>
+    <h3 style={{
+      fontFamily: TYPOGRAPHY.display,
+      fontSize: '32px',
+      fontWeight: 600,
+      color: COLORS.textPrimary,
+      marginBottom: '12px',
+    }}>
+      Unlock AI-Powered Career Help
+    </h3>
+    <p style={{
+      fontFamily: TYPOGRAPHY.body,
+      fontSize: '16px',
+      color: COLORS.textSecondary,
+    }}>
+      Choose the service that fits your needs
+    </p>
+  </div>
+
+  {/* 3 Individual Plans */}
+  <div style={{
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+    gap: '24px',
+    marginBottom: '32px',
+  }}>
+    {/* Plan 1: Salary Negotiation - ₹999 */}
+    <div style={{
+      background: COLORS.bg,
+      border: `2px solid ${COLORS.border}`,
+      borderRadius: '12px',
+      padding: '32px 24px',
+      textAlign: 'center',
+      transition: 'all 0.2s',
+      cursor: 'pointer',
+    }}
+    onMouseEnter={(e) => {
+      e.currentTarget.style.transform = 'translateY(-4px)';
+      e.currentTarget.style.borderColor = COLORS.primary;
+      e.currentTarget.style.boxShadow = '0 8px 24px rgba(37,99,235,0.15)';
+    }}
+    onMouseLeave={(e) => {
+      e.currentTarget.style.transform = 'translateY(0)';
+      e.currentTarget.style.borderColor = COLORS.border;
+      e.currentTarget.style.boxShadow = 'none';
+    }}
+    onClick={() => setShowPaymentModal(true)}>
+      <div style={{ fontSize: '48px', marginBottom: '16px' }}>💰</div>
+      <h4 style={{
+        fontFamily: TYPOGRAPHY.display,
+        fontSize: '20px',
+        fontWeight: 600,
+        color: COLORS.textPrimary,
+        marginBottom: '8px',
       }}>
-        {/* Blur overlay */}
-        <div style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backdropFilter: 'blur(5px)',
-          background: 'rgba(255, 255, 255, 0.8)',
-          zIndex: 1,
-        }}/>
-
-        {/* Lock icon */}
-        <div style={{
-          position: 'absolute',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          zIndex: 2,
-          textAlign: 'center',
+        Salary Negotiation
+      </h4>
+      <div style={{
+        fontFamily: TYPOGRAPHY.display,
+        fontSize: '36px',
+        fontWeight: 700,
+        color: COLORS.primary,
+        marginBottom: '8px',
+      }}>
+        ₹999
+        <span style={{
+          fontSize: '14px',
+          fontWeight: 500,
+          color: COLORS.textSecondary,
+          marginLeft: '4px',
         }}>
-          <div style={{
-            width: '64px',
-            height: '64px',
-            margin: '0 auto 16px',
-            background: COLORS.primary,
-            borderRadius: '12px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}>
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={COLORS.bg} strokeWidth="2">
-              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-            </svg>
-          </div>
-          <h4 style={{
-            fontFamily: TYPOGRAPHY.display,
-            fontSize: '24px',
-            fontWeight: 600,
-            color: COLORS.textPrimary,
-            marginBottom: '12px',
-          }}>
-            Unlock Full Report
-          </h4>
-          <p style={{
-            fontFamily: TYPOGRAPHY.body,
-            fontSize: '15px',
-            color: COLORS.textSecondary,
-            marginBottom: '24px',
-            maxWidth: '400px',
-          }}>
-            Get personalized negotiation strategies, detailed tips, and estimated potential increase of {countryInfo.format(analysisData.negotiationPotential)}+
-          </p>
-          <button
-            onClick={() => setShowPaymentModal(true)}
-            style={{
-              padding: '14px 32px',
-              background: COLORS.primary,
-              border: 'none',
-              borderRadius: '8px',
-              fontFamily: TYPOGRAPHY.body,
-              fontSize: '16px',
-              fontWeight: 600,
-              color: COLORS.bg,
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-              boxShadow: '0 4px 12px rgba(37, 99, 235, 0.3)',
-            }}
-          >
-            Unlock for ₹99
-          </button>
-        </div>
-
-        {/* Blurred content preview */}
-        <div style={{ filter: 'blur(4px)' }}>
-          <h4 style={{
-            fontFamily: TYPOGRAPHY.display,
-            fontSize: '20px',
-            fontWeight: 600,
-            color: COLORS.textPrimary,
-            marginBottom: '20px',
-          }}>
-            🎯 Negotiation Strategy
-          </h4>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {['Detailed negotiation timeline and approach', 'Company-specific tactics and leverage points', 'Alternative compensation strategies'].map((tip, i) => (
-              <div key={i} style={{
-                padding: '16px',
-                background: COLORS.bg,
-                borderRadius: '8px',
-                fontFamily: TYPOGRAPHY.body,
-                fontSize: '15px',
-                color: COLORS.textPrimary,
-              }}>
-                {tip}
-              </div>
-            ))}
-          </div>
-        </div>
+          /month
+        </span>
       </div>
+      <p style={{
+        fontFamily: TYPOGRAPHY.body,
+        fontSize: '13px',
+        color: COLORS.textSecondary,
+        marginBottom: '20px',
+        minHeight: '40px',
+      }}>
+        AI-powered negotiation strategies and coaching
+      </p>
+      <div style={{ 
+        textAlign: 'left',
+        fontSize: '13px',
+        color: COLORS.textPrimary,
+        marginBottom: '20px',
+      }}>
+        <div style={{ marginBottom: '8px' }}>✓ Personalized timeline</div>
+        <div style={{ marginBottom: '8px' }}>✓ Company tactics</div>
+        <div style={{ marginBottom: '8px' }}>✓ Email templates</div>
+        <div style={{ marginBottom: '8px' }}>✓ Unlimited AI chat</div>
+      </div>
+      <button style={{
+        width: '100%',
+        padding: '12px',
+        background: COLORS.primary,
+        border: 'none',
+        borderRadius: '8px',
+        fontFamily: TYPOGRAPHY.body,
+        fontSize: '15px',
+        fontWeight: 600,
+        color: COLORS.bg,
+        cursor: 'pointer',
+      }}>
+        Subscribe Now
+      </button>
+    </div>
 
-      {/* Payment Modal */}
+    {/* Plan 2: Resume Optimization - ₹499 */}
+    <div style={{
+      background: COLORS.bg,
+      border: `2px solid ${COLORS.border}`,
+      borderRadius: '12px',
+      padding: '32px 24px',
+      textAlign: 'center',
+      transition: 'all 0.2s',
+      cursor: 'pointer',
+    }}
+    onMouseEnter={(e) => {
+      e.currentTarget.style.transform = 'translateY(-4px)';
+      e.currentTarget.style.borderColor = COLORS.primary;
+      e.currentTarget.style.boxShadow = '0 8px 24px rgba(37,99,235,0.15)';
+    }}
+    onMouseLeave={(e) => {
+      e.currentTarget.style.transform = 'translateY(0)';
+      e.currentTarget.style.borderColor = COLORS.border;
+      e.currentTarget.style.boxShadow = 'none';
+    }}
+    onClick={() => setShowPaymentModal(true)}>
+      <div style={{ fontSize: '48px', marginBottom: '16px' }}>📄</div>
+      <h4 style={{
+        fontFamily: TYPOGRAPHY.display,
+        fontSize: '20px',
+        fontWeight: 600,
+        color: COLORS.textPrimary,
+        marginBottom: '8px',
+      }}>
+        Resume Optimization
+      </h4>
+      <div style={{
+        fontFamily: TYPOGRAPHY.display,
+        fontSize: '36px',
+        fontWeight: 700,
+        color: COLORS.primary,
+        marginBottom: '8px',
+      }}>
+        ₹499
+        <span style={{
+          fontSize: '14px',
+          fontWeight: 500,
+          color: COLORS.textSecondary,
+          marginLeft: '4px',
+        }}>
+          /month
+        </span>
+      </div>
+      <p style={{
+        fontFamily: TYPOGRAPHY.body,
+        fontSize: '13px',
+        color: COLORS.textSecondary,
+        marginBottom: '20px',
+        minHeight: '40px',
+      }}>
+        AI-powered resume review and enhancement
+      </p>
+      <div style={{ 
+        textAlign: 'left',
+        fontSize: '13px',
+        color: COLORS.textPrimary,
+        marginBottom: '20px',
+      }}>
+        <div style={{ marginBottom: '8px' }}>✓ ATS-friendly format</div>
+        <div style={{ marginBottom: '8px' }}>✓ Industry keywords</div>
+        <div style={{ marginBottom: '8px' }}>✓ Multiple revisions</div>
+        <div style={{ marginBottom: '8px' }}>✓ Cover letter help</div>
+      </div>
+      <button style={{
+        width: '100%',
+        padding: '12px',
+        background: COLORS.primary,
+        border: 'none',
+        borderRadius: '8px',
+        fontFamily: TYPOGRAPHY.body,
+        fontSize: '15px',
+        fontWeight: 600,
+        color: COLORS.bg,
+        cursor: 'pointer',
+      }}>
+        Subscribe Now
+      </button>
+    </div>
+
+    {/* Plan 3: Interview Prep - ₹1499 */}
+    <div style={{
+      background: COLORS.bg,
+      border: `2px solid ${COLORS.border}`,
+      borderRadius: '12px',
+      padding: '32px 24px',
+      textAlign: 'center',
+      transition: 'all 0.2s',
+      cursor: 'pointer',
+    }}
+    onMouseEnter={(e) => {
+      e.currentTarget.style.transform = 'translateY(-4px)';
+      e.currentTarget.style.borderColor = COLORS.primary;
+      e.currentTarget.style.boxShadow = '0 8px 24px rgba(37,99,235,0.15)';
+    }}
+    onMouseLeave={(e) => {
+      e.currentTarget.style.transform = 'translateY(0)';
+      e.currentTarget.style.borderColor = COLORS.border;
+      e.currentTarget.style.boxShadow = 'none';
+    }}
+    onClick={() => setShowPaymentModal(true)}>
+      <div style={{ fontSize: '48px', marginBottom: '16px' }}>🎯</div>
+      <h4 style={{
+        fontFamily: TYPOGRAPHY.display,
+        fontSize: '20px',
+        fontWeight: 600,
+        color: COLORS.textPrimary,
+        marginBottom: '8px',
+      }}>
+        Interview Preparation
+      </h4>
+      <div style={{
+        fontFamily: TYPOGRAPHY.display,
+        fontSize: '36px',
+        fontWeight: 700,
+        color: COLORS.primary,
+        marginBottom: '8px',
+      }}>
+        ₹1499
+        <span style={{
+          fontSize: '14px',
+          fontWeight: 500,
+          color: COLORS.textSecondary,
+          marginLeft: '4px',
+        }}>
+          /month
+        </span>
+      </div>
+      <p style={{
+        fontFamily: TYPOGRAPHY.body,
+        fontSize: '13px',
+        color: COLORS.textSecondary,
+        marginBottom: '20px',
+        minHeight: '40px',
+      }}>
+        AI mock interviews and question bank
+      </p>
+      <div style={{ 
+        textAlign: 'left',
+        fontSize: '13px',
+        color: COLORS.textPrimary,
+        marginBottom: '20px',
+      }}>
+        <div style={{ marginBottom: '8px' }}>✓ Mock interviews</div>
+        <div style={{ marginBottom: '8px' }}>✓ Answer feedback</div>
+        <div style={{ marginBottom: '8px' }}>✓ Question bank</div>
+        <div style={{ marginBottom: '8px' }}>✓ Company insights</div>
+      </div>
+      <button style={{
+        width: '100%',
+        padding: '12px',
+        background: COLORS.primary,
+        border: 'none',
+        borderRadius: '8px',
+        fontFamily: TYPOGRAPHY.body,
+        fontSize: '15px',
+        fontWeight: 600,
+        color: COLORS.bg,
+        cursor: 'pointer',
+      }}>
+        Subscribe Now
+      </button>
+    </div>
+  </div>
+
+  {/* Bundle Offer - ₹1999 (Save ₹998!) */}
+  <div style={{
+    background: `linear-gradient(135deg, ${COLORS.primary} 0%, ${COLORS.success} 100%)`,
+    borderRadius: '12px',
+    padding: '32px',
+    textAlign: 'center',
+    position: 'relative',
+    overflow: 'hidden',
+    cursor: 'pointer',
+  }}
+  onClick={() => setShowPaymentModal(true)}>
+    <div style={{
+      position: 'absolute',
+      top: '16px',
+      right: '16px',
+      background: COLORS.warning,
+      color: COLORS.bgDark,
+      padding: '6px 16px',
+      borderRadius: '20px',
+      fontFamily: TYPOGRAPHY.body,
+      fontSize: '12px',
+      fontWeight: 700,
+    }}>
+      SAVE ₹998!
+    </div>
+    <h4 style={{
+      fontFamily: TYPOGRAPHY.display,
+      fontSize: '28px',
+      fontWeight: 700,
+      color: COLORS.bg,
+      marginBottom: '8px',
+    }}>
+      🎁 Complete Career Bundle
+    </h4>
+    <p style={{
+      fontFamily: TYPOGRAPHY.body,
+      fontSize: '16px',
+      color: 'rgba(255,255,255,0.9)',
+      marginBottom: '16px',
+    }}>
+      Get all 3 services together
+    </p>
+    <div style={{
+      fontFamily: TYPOGRAPHY.display,
+      fontSize: '48px',
+      fontWeight: 700,
+      color: COLORS.bg,
+      marginBottom: '16px',
+    }}>
+      ₹1999
+      <span style={{
+        fontSize: '16px',
+        fontWeight: 500,
+        marginLeft: '8px',
+      }}>
+        /month
+      </span>
+    </div>
+    <p style={{
+      fontFamily: TYPOGRAPHY.body,
+      fontSize: '14px',
+      color: 'rgba(255,255,255,0.8)',
+      marginBottom: '24px',
+    }}>
+      Regular price: ₹2997 • You save: ₹998
+    </p>
+    <button style={{
+      padding: '16px 48px',
+      background: COLORS.bg,
+      border: 'none',
+      borderRadius: '8px',
+      fontFamily: TYPOGRAPHY.body,
+      fontSize: '18px',
+      fontWeight: 700,
+      color: COLORS.primary,
+      cursor: 'pointer',
+      boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+      transition: 'transform 0.2s',
+    }}
+    onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.05)'}
+    onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+    onClick={(e) => {
+      e.stopPropagation();
+      setShowPaymentModal(true);
+    }}>
+      Get Bundle Now →
+    </button>
+  </div>
+</div>
       {showPaymentModal && (
         <PaymentModal
           amount={99}
