@@ -22,6 +22,70 @@ const COLORS = {
   amber: '#FBBF24',
   coral: '#F87171',
   blue: '#3B82F6',
+  red: '#EF4444',
+};
+
+// ============================================
+// SUPABASE CONFIG (Update these after setup)
+// ============================================
+
+const SUPABASE_URL = 'YOUR_SUPABASE_URL'; // e.g., https://xyz.supabase.co
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+
+// Helper to upload to Supabase
+const uploadToSupabase = async (file, metadata) => {
+  if (SUPABASE_URL === 'YOUR_SUPABASE_URL') {
+    console.log('Supabase not configured, skipping upload');
+    return null;
+  }
+
+  try {
+    const timestamp = Date.now();
+    const fileName = `${timestamp}_${file.name}`;
+    
+    // Upload file to storage
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const uploadResponse = await fetch(
+      `${SUPABASE_URL}/storage/v1/object/documents/${fileName}`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'x-upsert': 'true',
+        },
+        body: file,
+      }
+    );
+
+    // Save metadata to database
+    const dbResponse = await fetch(
+      `${SUPABASE_URL}/rest/v1/uploads`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'apikey': SUPABASE_ANON_KEY,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({
+          file_name: fileName,
+          original_name: file.name,
+          document_type: metadata.documentType,
+          extracted_data: metadata.extractedData,
+          country: metadata.country,
+          created_at: new Date().toISOString(),
+        }),
+      }
+    );
+
+    return { success: true, fileName };
+  } catch (error) {
+    console.error('Upload error:', error);
+    return { success: false, error };
+  }
 };
 
 // ============================================
@@ -123,32 +187,27 @@ const Navigation = ({ activeSection }) => {
 };
 
 // ============================================
-// MAIN HERO WITH UPLOAD
+// MAIN HERO WITH SMART UPLOAD
 // ============================================
 
-const HeroWithUpload = ({ onFileAnalyzed }) => {
+const HeroWithUpload = () => {
   const [dragActive, setDragActive] = useState(false);
   const [uploadedFile, setUploadedFile] = useState(null);
-  const [isDetecting, setIsDetecting] = useState(false);
-  const [detectedInfo, setDetectedInfo] = useState(null);
-  const [userInfo, setUserInfo] = useState({
-    yearsOfExperience: '',
-    college: '',
-  });
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [processingStatus, setProcessingStatus] = useState('');
+  const [extractedData, setExtractedData] = useState(null);
+  const [missingFields, setMissingFields] = useState([]);
+  const [userInputs, setUserInputs] = useState({});
+  const [error, setError] = useState(null);
   const [analysisResult, setAnalysisResult] = useState(null);
-  const [step, setStep] = useState('upload'); // upload, collecting-info, analyzing, results
+  const [step, setStep] = useState('upload'); // upload, processing, collecting-info, analyzing, results, error
 
   const colleges = [
-    { value: 'iit', label: 'IIT (Any)' },
-    { value: 'nit', label: 'NIT / IIIT' },
-    { value: 'bits', label: 'BITS Pilani' },
-    { value: 'tier1-private', label: 'Tier-1 Private (VIT, SRM, Manipal)' },
-    { value: 'tier1-state', label: 'Tier-1 State University' },
-    { value: 'tier2', label: 'Tier-2 Engineering College' },
-    { value: 'tier3', label: 'Tier-3 / Other' },
-    { value: 'iim', label: 'IIM / Top B-School (MBA)' },
-    { value: 'other-mba', label: 'Other MBA' },
+    { value: 'top-tier', label: 'Top Tier (IIT/Stanford/MIT/Oxbridge etc.)' },
+    { value: 'tier-1', label: 'Tier 1 (NIT/BITS/Top State Universities)' },
+    { value: 'tier-2', label: 'Tier 2 (Good Regional Colleges)' },
+    { value: 'tier-3', label: 'Tier 3 / Other' },
+    { value: 'bootcamp', label: 'Bootcamp / Self-taught' },
   ];
 
   const handleDrag = (e) => {
@@ -166,58 +225,97 @@ const HeroWithUpload = ({ onFileAnalyzed }) => {
     e.stopPropagation();
     setDragActive(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFileUpload(e.dataTransfer.files[0]);
+      processFile(e.dataTransfer.files[0]);
     }
   };
 
   const handleFileSelect = (e) => {
     if (e.target.files && e.target.files[0]) {
-      handleFileUpload(e.target.files[0]);
+      processFile(e.target.files[0]);
     }
   };
 
-  const handleFileUpload = async (file) => {
+  const processFile = async (file) => {
     setUploadedFile(file);
-    setIsDetecting(true);
+    setStep('processing');
+    setProcessingStatus('Reading document...');
+    setError(null);
 
-    // Convert file to base64 for image files, or just use filename for detection
-    const isImage = file.type.startsWith('image/');
-    let fileContent = file.name;
+    // Convert to base64 for images
+    let fileData = { name: file.name, type: file.type, size: file.size };
     
-    if (isImage) {
+    if (file.type.startsWith('image/')) {
       const reader = new FileReader();
       reader.onload = async (e) => {
-        await detectDocumentType(file.name, e.target.result);
+        fileData.base64 = e.target.result;
+        await extractDocumentInfo(fileData);
       };
       reader.readAsDataURL(file);
     } else {
-      await detectDocumentType(file.name, null);
+      // For PDFs and docs, we'll use filename + any text extraction
+      await extractDocumentInfo(fileData);
     }
   };
 
-  const detectDocumentType = async (fileName, base64Image) => {
-    const prompt = `You are analyzing a document uploaded by an Indian professional. Based on the filename "${fileName}" and common document patterns, determine what type of document this is and extract any information you can infer.
+  const extractDocumentInfo = async (fileData) => {
+    setProcessingStatus('AI is analyzing your document...');
 
-Respond ONLY with valid JSON (no markdown, no explanation):
+    const extractionPrompt = `You are an expert document analyzer. Analyze this uploaded document and extract all possible information.
+
+Document: "${fileData.name}" (${fileData.type})
+${fileData.base64 ? 'Image data is provided.' : 'PDF/DOC file based on filename.'}
+
+Your task:
+1. Determine if this is an OFFER LETTER, SALARY SLIP, or RESUME/CV
+2. If it's NONE of these three types, return isValidDocument: false
+3. Extract ALL information you can find or reasonably infer
+4. Identify the COUNTRY based on currency symbols (₹=India, $=USA, £=UK, €=Europe, ¥=Japan/China, etc.), company names, or any other clues
+5. List what fields are MISSING that we need to ask the user
+
+RESPOND ONLY WITH VALID JSON:
 {
-  "documentType": "offer_letter" | "salary_slip" | "resume",
-  "documentTypeLabel": "Offer Letter" | "Salary Slip" | "Resume/CV",
+  "isValidDocument": true/false,
+  "documentType": "offer_letter" | "salary_slip" | "resume" | "unknown",
+  "documentTypeLabel": "Offer Letter" | "Salary Slip" | "Resume/CV" | "Unknown Document",
   "confidence": "high" | "medium" | "low",
-  "extractedInfo": {
-    "role": "<inferred role or null>",
-    "company": "<inferred company or null>",
-    "salary": "<inferred salary in LPA as number or null>",
-    "location": "<inferred city or null>",
-    "yearsOfExperience": "<inferred years or null>"
+  "country": {
+    "code": "IN" | "US" | "UK" | "DE" | "SG" | etc.,
+    "name": "India" | "United States" | "United Kingdom" | etc.,
+    "currency": "INR" | "USD" | "GBP" | etc.,
+    "currencySymbol": "₹" | "$" | "£" | etc.,
+    "detectedFrom": "currency symbol" | "company name" | "address" | "phone format" | "inferred"
   },
-  "needsFromUser": ["yearsOfExperience", "college"] // always need these if not found
+  "extractedData": {
+    "role": "<job title or null>",
+    "company": "<company name or null>",
+    "salary": "<annual salary as number or null>",
+    "salaryFormatted": "<formatted salary string like '₹24 LPA' or '$120,000' or null>",
+    "yearsOfExperience": "<years as number or null>",
+    "location": "<city or null>",
+    "skills": ["<skill1>", "<skill2>"] or null,
+    "education": "<degree/college or null>",
+    "collegeTier": "top-tier" | "tier-1" | "tier-2" | "tier-3" | "bootcamp" | null
+  },
+  "missingFields": [
+    {
+      "field": "salary",
+      "label": "Current/Expected Salary",
+      "type": "number",
+      "placeholder": "e.g., 50000",
+      "required": true,
+      "reason": "Resume doesn't contain salary information"
+    }
+  ],
+  "errorMessage": "<only if isValidDocument is false, explain why>"
 }
 
-Common patterns:
-- "offer_letter", "offer", "appointment" -> Offer Letter
-- "payslip", "salary_slip", "pay_slip", "salary" -> Salary Slip  
-- "resume", "cv", "curriculum" -> Resume
-- If unclear, make best guess based on filename`;
+IMPORTANT RULES:
+- For RESUME: salary is ALWAYS missing, experience might be extractable from work history
+- For OFFER LETTER: experience is often missing, salary should be there
+- For SALARY SLIP: role and salary should be there, experience might be missing
+- Always try to detect country - default to "IN" (India) if completely unclear
+- collegeTier should be inferred if education is found (IIT/NIT = top-tier/tier-1, etc.)
+- If document type cannot be determined, set isValidDocument: false`;
 
     try {
       const response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -225,85 +323,138 @@ Common patterns:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 500,
-          messages: [{ role: "user", content: prompt }],
+          max_tokens: 1500,
+          messages: [{ 
+            role: "user", 
+            content: fileData.base64 
+              ? [
+                  { type: "image", source: { type: "base64", media_type: fileData.type, data: fileData.base64.split(',')[1] } },
+                  { type: "text", text: extractionPrompt }
+                ]
+              : extractionPrompt
+          }],
         })
       });
 
       const data = await response.json();
-      const text = data.content.map(item => item.text || "").join("");
+      const text = data.content?.map(item => item.text || "").join("") || "";
       const cleanJson = text.replace(/```json|```/g, "").trim();
-      const detected = JSON.parse(cleanJson);
       
-      setDetectedInfo(detected);
-      
-      // Pre-fill any extracted info
-      if (detected.extractedInfo.yearsOfExperience) {
-        setUserInfo(prev => ({ ...prev, yearsOfExperience: detected.extractedInfo.yearsOfExperience }));
+      let extracted;
+      try {
+        extracted = JSON.parse(cleanJson);
+      } catch (parseError) {
+        throw new Error("Failed to parse document");
       }
-      
-      setStep('collecting-info');
-    } catch (error) {
-      console.error('Detection error:', error);
-      // Fallback detection based on filename
-      let docType = 'resume';
-      let docLabel = 'Resume/CV';
-      const lowerName = fileName.toLowerCase();
-      
-      if (lowerName.includes('offer') || lowerName.includes('appointment')) {
-        docType = 'offer_letter';
-        docLabel = 'Offer Letter';
-      } else if (lowerName.includes('slip') || lowerName.includes('payslip') || lowerName.includes('salary')) {
-        docType = 'salary_slip';
-        docLabel = 'Salary Slip';
+
+      // Check if valid document
+      if (!extracted.isValidDocument) {
+        setError({
+          title: "Invalid Document",
+          message: extracted.errorMessage || "This doesn't appear to be an offer letter, salary slip, or resume. Please upload one of these document types.",
+        });
+        setStep('error');
+        return;
       }
-      
-      setDetectedInfo({
-        documentType: docType,
-        documentTypeLabel: docLabel,
-        confidence: 'medium',
-        extractedInfo: { role: null, company: null, salary: null, location: null, yearsOfExperience: null },
-        needsFromUser: ['yearsOfExperience', 'college']
+
+      // Upload to Supabase (if configured)
+      await uploadToSupabase(uploadedFile, {
+        documentType: extracted.documentType,
+        extractedData: extracted.extractedData,
+        country: extracted.country,
       });
-      setStep('collecting-info');
+
+      setExtractedData(extracted);
+
+      // Check if we need any additional info
+      if (extracted.missingFields && extracted.missingFields.length > 0) {
+        setMissingFields(extracted.missingFields);
+        // Initialize user inputs
+        const inputs = {};
+        extracted.missingFields.forEach(f => {
+          inputs[f.field] = '';
+        });
+        setUserInputs(inputs);
+        setStep('collecting-info');
+      } else {
+        // We have everything, proceed to analysis
+        await runAnalysis(extracted);
+      }
+
+    } catch (error) {
+      console.error('Extraction error:', error);
+      setError({
+        title: "Processing Error",
+        message: "We couldn't process your document. Please try again or upload a clearer image/PDF.",
+      });
+      setStep('error');
     }
-    
-    setIsDetecting(false);
   };
 
-  const runFullAnalysis = async () => {
-    setIsAnalyzing(true);
+  const runAnalysis = async (data) => {
     setStep('analyzing');
+    
+    // Merge extracted data with user inputs
+    const finalData = {
+      ...data.extractedData,
+      ...userInputs,
+    };
+    
+    const country = data.country;
+    const currencySymbol = country.currencySymbol || '₹';
+    const countryName = country.name || 'India';
 
-    const prompt = `You are a salary analysis expert for the Indian job market. Analyze this professional's compensation.
+    const analysisPrompt = `You are a global salary analysis expert. Analyze this professional's compensation for ${countryName}.
 
 Profile:
-- Document Type: ${detectedInfo.documentTypeLabel}
-- Role: ${detectedInfo.extractedInfo.role || 'Software Engineer'}
-- Years of Experience: ${userInfo.yearsOfExperience} years
-- College Tier: ${colleges.find(c => c.value === userInfo.college)?.label || userInfo.college}
-- Location: ${detectedInfo.extractedInfo.location || 'Bangalore'}
-- Current/Offered Salary: ₹${detectedInfo.extractedInfo.salary || '20'} LPA
+- Document Type: ${data.documentTypeLabel}
+- Country: ${countryName} (${country.code})
+- Currency: ${country.currency} (${currencySymbol})
+- Role: ${finalData.role || 'Software Professional'}
+- Company: ${finalData.company || 'Not specified'}
+- Years of Experience: ${finalData.yearsOfExperience || 'Not specified'}
+- Location: ${finalData.location || 'Not specified'}
+- Education/College Tier: ${finalData.collegeTier || finalData.education || 'Not specified'}
+- Current/Offered Salary: ${finalData.salary ? `${currencySymbol}${finalData.salary}` : 'Not specified'}
 
-Based on current Indian market data (2024-2025), provide a JSON response:
+Provide salary analysis for ${countryName} job market. Use accurate market data for that country.
+
+RESPOND ONLY WITH VALID JSON:
 {
-  "marketMin": <minimum salary in LPA for this profile as number>,
-  "marketMedian": <median salary in LPA as number>,
-  "marketMax": <maximum/top quartile salary in LPA as number>,
-  "percentile": <where this person stands 1-100>,
-  "verdict": "Below Market" | "Fair" | "Above Market" | "Excellent",
-  "gap": <salary gap from median, negative if above>,
-  "insights": ["<insight 1>", "<insight 2>", "<insight 3>"],
-  "negotiationPotential": <estimated additional salary they could negotiate in LPA>
+  "marketMin": <minimum salary as number>,
+  "marketMedian": <median salary as number>,
+  "marketMax": <top quartile salary as number>,
+  "userSalary": <user's salary as number>,
+  "percentile": <1-100>,
+  "verdict": "Below Market" | "Slightly Below" | "Fair" | "Above Market" | "Excellent",
+  "verdictEmoji": "📉" | "↘️" | "✅" | "📈" | "🚀",
+  "gap": <gap from median, negative if above>,
+  "gapPercentage": <percentage difference from median>,
+  "countryContext": "<brief note about job market in this country>",
+  "insights": [
+    "<insight 1 specific to their country/role>",
+    "<insight 2>",
+    "<insight 3>"
+  ],
+  "negotiationPotential": <estimated additional salary possible>,
+  "formattedSalaries": {
+    "user": "<formatted like '$120K' or '₹24 LPA' or '£65K'>",
+    "min": "<formatted>",
+    "median": "<formatted>",
+    "max": "<formatted>",
+    "gap": "<formatted with + or - sign>",
+    "negotiation": "<formatted>"
+  }
 }
 
-Consider:
-- IIT/NIT graduates: 20-40% premium
-- Bangalore: 10-15% more than other cities
-- Product companies pay more than services
-- Experience multipliers are non-linear
+COUNTRY-SPECIFIC FORMATTING:
+- India: Use LPA (Lakhs Per Annum), e.g., "₹24 LPA"
+- USA: Use K notation, e.g., "$120K"
+- UK: Use K notation, e.g., "£65K"
+- Europe: Use K notation, e.g., "€70K"
+- Singapore: Use K notation, e.g., "S$95K"
 
-RESPOND ONLY WITH VALID JSON.`;
+Consider local market factors, cost of living, and typical salary ranges for the country.`;
 
     try {
       const response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -311,46 +462,83 @@ RESPOND ONLY WITH VALID JSON.`;
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          messages: [{ role: "user", content: prompt }],
+          max_tokens: 1500,
+          messages: [{ role: "user", content: analysisPrompt }],
         })
       });
 
-      const data = await response.json();
-      const text = data.content.map(item => item.text || "").join("");
+      const responseData = await response.json();
+      const text = responseData.content?.map(item => item.text || "").join("") || "";
       const cleanJson = text.replace(/```json|```/g, "").trim();
       const result = JSON.parse(cleanJson);
       
-      setAnalysisResult(result);
+      setAnalysisResult({
+        ...result,
+        country: country,
+        documentType: data.documentTypeLabel,
+        profile: finalData,
+      });
       setStep('results');
+
     } catch (error) {
       console.error('Analysis error:', error);
-      const baseSalary = parseFloat(detectedInfo.extractedInfo.salary) || 20;
+      // Fallback
+      const baseSalary = parseFloat(finalData.salary) || 50000;
       setAnalysisResult({
         marketMin: Math.round(baseSalary * 0.7),
-        marketMedian: Math.round(baseSalary * 1.15),
-        marketMax: Math.round(baseSalary * 1.6),
-        percentile: 42,
+        marketMedian: Math.round(baseSalary * 1.1),
+        marketMax: Math.round(baseSalary * 1.5),
+        userSalary: baseSalary,
+        percentile: 45,
         verdict: "Fair",
-        gap: Math.round(baseSalary * 0.15),
+        verdictEmoji: "✅",
+        gap: Math.round(baseSalary * 0.1),
         insights: [
-          "Your compensation is within the expected range for your experience",
-          "Consider upskilling in cloud technologies to command higher packages",
-          "Professionals from similar backgrounds see 20-30% jumps when switching"
+          "Your compensation appears to be within market range",
+          "Consider upskilling to command higher packages",
+          "Location and company type significantly impact salary"
         ],
-        negotiationPotential: Math.round(baseSalary * 0.12),
+        negotiationPotential: Math.round(baseSalary * 0.1),
+        formattedSalaries: {
+          user: `${country.currencySymbol}${baseSalary.toLocaleString()}`,
+          min: `${country.currencySymbol}${Math.round(baseSalary * 0.7).toLocaleString()}`,
+          median: `${country.currencySymbol}${Math.round(baseSalary * 1.1).toLocaleString()}`,
+          max: `${country.currencySymbol}${Math.round(baseSalary * 1.5).toLocaleString()}`,
+          gap: `-${country.currencySymbol}${Math.round(baseSalary * 0.1).toLocaleString()}`,
+          negotiation: `+${country.currencySymbol}${Math.round(baseSalary * 0.1).toLocaleString()}`,
+        },
+        country: country,
+        countryContext: `Analysis based on ${country.name} market data.`,
+        documentType: data.documentTypeLabel,
+        profile: finalData,
       });
       setStep('results');
     }
-    
-    setIsAnalyzing(false);
+  };
+
+  const handleUserInputSubmit = () => {
+    // Validate required fields
+    const allFilled = missingFields.every(f => !f.required || userInputs[f.field]);
+    if (allFilled) {
+      // Merge inputs into extracted data
+      const mergedData = {
+        ...extractedData,
+        extractedData: {
+          ...extractedData.extractedData,
+          ...userInputs,
+        }
+      };
+      runAnalysis(mergedData);
+    }
   };
 
   const resetFlow = () => {
     setStep('upload');
     setUploadedFile(null);
-    setDetectedInfo(null);
-    setUserInfo({ yearsOfExperience: '', college: '' });
+    setExtractedData(null);
+    setMissingFields([]);
+    setUserInputs({});
+    setError(null);
     setAnalysisResult(null);
   };
 
@@ -378,7 +566,6 @@ RESPOND ONLY WITH VALID JSON.`;
         }}/>
 
         <div style={{ maxWidth: '700px', width: '100%', textAlign: 'center', position: 'relative', zIndex: 1 }}>
-          {/* Badge */}
           <div style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -389,24 +576,12 @@ RESPOND ONLY WITH VALID JSON.`;
             padding: '8px 16px',
             marginBottom: '32px',
           }}>
-            <span style={{
-              width: '8px',
-              height: '8px',
-              borderRadius: '50%',
-              background: COLORS.primary,
-              animation: 'pulse 2s infinite',
-            }}/>
-            <span style={{
-              fontFamily: "'Inter', sans-serif",
-              fontSize: '14px',
-              fontWeight: 500,
-              color: COLORS.primary,
-            }}>
-              23,000+ salary data points from India
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: COLORS.primary, animation: 'pulse 2s infinite' }}/>
+            <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', fontWeight: 500, color: COLORS.primary }}>
+              Works globally • 50+ countries supported
             </span>
           </div>
 
-          {/* Headline */}
           <h1 style={{
             fontFamily: "'Space Grotesk', sans-serif",
             fontSize: 'clamp(42px, 7vw, 72px)',
@@ -426,11 +601,11 @@ RESPOND ONLY WITH VALID JSON.`;
             lineHeight: 1.6,
             marginBottom: '40px',
           }}>
-            Drop your offer letter, salary slip, or resume below.<br/>
-            Get instant salary insights powered by AI.
+            Drop your offer letter, salary slip, or resume.<br/>
+            AI extracts everything & tells you if you're paid fairly.
           </p>
 
-          {/* UPLOAD ZONE - DIRECTLY IN HERO */}
+          {/* UPLOAD ZONE */}
           <div
             onDragEnter={handleDrag}
             onDragLeave={handleDrag}
@@ -446,90 +621,45 @@ RESPOND ONLY WITH VALID JSON.`;
               marginBottom: '24px',
             }}
           >
-            {isDetecting ? (
-              <>
-                <div style={{
-                  width: '56px',
-                  height: '56px',
-                  borderRadius: '50%',
-                  border: `3px solid ${COLORS.border}`,
-                  borderTopColor: COLORS.primary,
-                  margin: '0 auto 20px',
-                  animation: 'spin 1s linear infinite',
-                }}/>
-                <p style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: '16px',
-                  fontWeight: 500,
-                  color: COLORS.white,
-                }}>
-                  Analyzing document...
-                </p>
-              </>
-            ) : (
-              <>
-                <div style={{
-                  width: '64px',
-                  height: '64px',
-                  borderRadius: '50%',
-                  background: COLORS.bgHover,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  margin: '0 auto 20px',
-                }}>
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={COLORS.gray400} strokeWidth="1.5">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                    <polyline points="17 8 12 3 7 8"/>
-                    <line x1="12" y1="3" x2="12" y2="15"/>
-                  </svg>
-                </div>
-                <p style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: '18px',
-                  fontWeight: 500,
-                  color: COLORS.white,
-                  marginBottom: '8px',
-                }}>
-                  Drag & drop your document here
-                </p>
-                <p style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: '14px',
-                  color: COLORS.gray500,
-                  marginBottom: '20px',
-                }}>
-                  Offer letter, salary slip, or resume • PDF, DOC, PNG, JPG
-                </p>
-                <input 
-                  type="file" 
-                  id="fileInput" 
-                  style={{ display: 'none' }}
-                  onChange={handleFileSelect}
-                  accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
-                />
-                <label 
-                  htmlFor="fileInput"
-                  style={{
-                    display: 'inline-block',
-                    background: COLORS.primary,
-                    border: 'none',
-                    padding: '14px 32px',
-                    borderRadius: '8px',
-                    fontFamily: "'Inter', sans-serif",
-                    fontSize: '15px',
-                    fontWeight: 600,
-                    color: COLORS.bg,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Choose File
-                </label>
-              </>
-            )}
+            <div style={{
+              width: '64px',
+              height: '64px',
+              borderRadius: '50%',
+              background: COLORS.bgHover,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto 20px',
+            }}>
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={COLORS.gray400} strokeWidth="1.5">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+            </div>
+            <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '18px', fontWeight: 500, color: COLORS.white, marginBottom: '8px' }}>
+              Drag & drop your document here
+            </p>
+            <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray500, marginBottom: '20px' }}>
+              Offer letter • Salary slip • Resume — PDF, DOC, PNG, JPG
+            </p>
+            <input type="file" id="fileInput" style={{ display: 'none' }} onChange={handleFileSelect} accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
+            <label htmlFor="fileInput" style={{
+              display: 'inline-block',
+              background: COLORS.primary,
+              border: 'none',
+              padding: '14px 32px',
+              borderRadius: '8px',
+              fontFamily: "'Inter', sans-serif",
+              fontSize: '15px',
+              fontWeight: 600,
+              color: COLORS.bg,
+              cursor: 'pointer',
+            }}>
+              Choose File
+            </label>
           </div>
 
-          {/* Trust */}
           <p style={{
             fontFamily: "'Inter', sans-serif",
             fontSize: '13px',
@@ -543,40 +673,89 @@ RESPOND ONLY WITH VALID JSON.`;
               <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
               <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
             </svg>
-            Your documents are encrypted & never shared with employers
+            Your documents are encrypted & never shared
           </p>
         </div>
 
         <style>{`
-          @keyframes pulse {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.6; transform: scale(0.95); }
-          }
-          @keyframes spin {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
-          }
+          @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+          @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         `}</style>
       </section>
     );
   }
 
-  // ========== COLLECTING INFO STATE ==========
-  if (step === 'collecting-info' && detectedInfo) {
+  // ========== PROCESSING STATE ==========
+  if (step === 'processing') {
     return (
-      <section 
-        id="hero"
-        style={{
-          minHeight: '100vh',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: '120px 24px 80px',
-          background: COLORS.bg,
-        }}
-      >
+      <section id="hero" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '120px 24px', background: COLORS.bg }}>
+        <div style={{ textAlign: 'center', maxWidth: '400px' }}>
+          <div style={{ width: '64px', height: '64px', borderRadius: '50%', border: `3px solid ${COLORS.border}`, borderTopColor: COLORS.primary, margin: '0 auto 24px', animation: 'spin 1s linear infinite' }}/>
+          <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '24px', fontWeight: 700, color: COLORS.white, marginBottom: '8px' }}>
+            {processingStatus}
+          </h2>
+          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray500 }}>
+            {uploadedFile?.name}
+          </p>
+        </div>
+        <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      </section>
+    );
+  }
+
+  // ========== ERROR STATE ==========
+  if (step === 'error' && error) {
+    return (
+      <section id="hero" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '120px 24px', background: COLORS.bg }}>
+        <div style={{ textAlign: 'center', maxWidth: '450px' }}>
+          <div style={{
+            width: '72px',
+            height: '72px',
+            borderRadius: '50%',
+            background: 'rgba(239, 68, 68, 0.15)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto 24px',
+          }}>
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={COLORS.red} strokeWidth="2">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="15" y1="9" x2="9" y2="15"/>
+              <line x1="9" y1="9" x2="15" y2="15"/>
+            </svg>
+          </div>
+          <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '28px', fontWeight: 700, color: COLORS.white, marginBottom: '12px' }}>
+            {error.title}
+          </h2>
+          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '16px', color: COLORS.gray400, marginBottom: '32px', lineHeight: 1.6 }}>
+            {error.message}
+          </p>
+          <button onClick={resetFlow} style={{
+            background: COLORS.primary,
+            border: 'none',
+            padding: '14px 32px',
+            borderRadius: '8px',
+            fontFamily: "'Inter', sans-serif",
+            fontSize: '15px',
+            fontWeight: 600,
+            color: COLORS.bg,
+            cursor: 'pointer',
+          }}>
+            Try Again
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  // ========== COLLECTING INFO STATE ==========
+  if (step === 'collecting-info' && extractedData) {
+    const canSubmit = missingFields.every(f => !f.required || userInputs[f.field]);
+    
+    return (
+      <section id="hero" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '120px 24px', background: COLORS.bg }}>
         <div style={{ maxWidth: '500px', width: '100%' }}>
-          {/* Detected Document */}
+          {/* Detected Info */}
           <div style={{
             display: 'flex',
             alignItems: 'center',
@@ -584,222 +763,149 @@ RESPOND ONLY WITH VALID JSON.`;
             padding: '20px',
             background: COLORS.primaryMuted,
             borderRadius: '12px',
-            marginBottom: '32px',
+            marginBottom: '24px',
           }}>
-            <div style={{
-              width: '48px',
-              height: '48px',
-              borderRadius: '10px',
-              background: COLORS.bgCard,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}>
+            <div style={{ width: '48px', height: '48px', borderRadius: '10px', background: COLORS.bgCard, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={COLORS.primary} strokeWidth="1.5">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
+                <polyline points="20 6 9 17 4 12"/>
               </svg>
             </div>
             <div style={{ flex: 1 }}>
-              <p style={{
-                fontFamily: "'Inter', sans-serif",
-                fontSize: '14px',
-                color: COLORS.gray400,
-                marginBottom: '2px',
-              }}>
-                Detected as
-              </p>
-              <p style={{
-                fontFamily: "'Space Grotesk', sans-serif",
-                fontSize: '18px',
-                fontWeight: 600,
-                color: COLORS.white,
-              }}>
-                {detectedInfo.documentTypeLabel}
+              <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', color: COLORS.gray400, marginBottom: '2px' }}>Detected</p>
+              <p style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '18px', fontWeight: 600, color: COLORS.white }}>
+                {extractedData.documentTypeLabel} • {extractedData.country?.name || 'India'}
               </p>
             </div>
-            <span style={{
-              padding: '4px 10px',
-              borderRadius: '100px',
-              background: COLORS.bgCard,
-              fontFamily: "'Inter', sans-serif",
-              fontSize: '12px',
-              color: COLORS.primary,
-              textTransform: 'capitalize',
-            }}>
-              {detectedInfo.confidence} confidence
-            </span>
           </div>
 
-          {/* File info */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            padding: '12px 16px',
-            background: COLORS.bgCard,
-            borderRadius: '8px',
-            marginBottom: '32px',
-          }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={COLORS.gray500} strokeWidth="1.5">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
-            </svg>
-            <span style={{
-              fontFamily: "'Inter', sans-serif",
-              fontSize: '14px',
-              color: COLORS.gray300,
-              flex: 1,
-            }}>
-              {uploadedFile?.name}
-            </span>
-            <button
-              onClick={resetFlow}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: COLORS.gray500,
-                cursor: 'pointer',
-                padding: '4px',
-              }}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="18" y1="6" x2="6" y2="18"/>
-                <line x1="6" y1="6" x2="18" y2="18"/>
-              </svg>
-            </button>
-          </div>
+          {/* Extracted Data Summary */}
+          {Object.entries(extractedData.extractedData).some(([k, v]) => v && k !== 'skills') && (
+            <div style={{ background: COLORS.bgCard, borderRadius: '12px', padding: '20px', marginBottom: '24px', border: `1px solid ${COLORS.border}` }}>
+              <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 600, color: COLORS.gray400, marginBottom: '16px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Extracted from document
+              </p>
+              <div style={{ display: 'grid', gap: '12px' }}>
+                {extractedData.extractedData.role && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray500 }}>Role</span>
+                    <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.white, fontWeight: 500 }}>{extractedData.extractedData.role}</span>
+                  </div>
+                )}
+                {extractedData.extractedData.company && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray500 }}>Company</span>
+                    <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.white, fontWeight: 500 }}>{extractedData.extractedData.company}</span>
+                  </div>
+                )}
+                {extractedData.extractedData.salaryFormatted && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray500 }}>Salary</span>
+                    <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '14px', color: COLORS.primary, fontWeight: 600 }}>{extractedData.extractedData.salaryFormatted}</span>
+                  </div>
+                )}
+                {extractedData.extractedData.yearsOfExperience && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray500 }}>Experience</span>
+                    <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.white, fontWeight: 500 }}>{extractedData.extractedData.yearsOfExperience} years</span>
+                  </div>
+                )}
+                {extractedData.extractedData.location && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray500 }}>Location</span>
+                    <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.white, fontWeight: 500 }}>{extractedData.extractedData.location}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
-          {/* Form Title */}
-          <h2 style={{
-            fontFamily: "'Space Grotesk', sans-serif",
-            fontSize: '28px',
-            fontWeight: 700,
-            color: COLORS.white,
-            marginBottom: '8px',
-          }}>
-            A few more details
+          {/* Missing Fields Form */}
+          <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '24px', fontWeight: 700, color: COLORS.white, marginBottom: '8px' }}>
+            Just need a bit more info
           </h2>
-          <p style={{
-            fontFamily: "'Inter', sans-serif",
-            fontSize: '15px',
-            color: COLORS.gray400,
-            marginBottom: '32px',
-          }}>
-            We need this to give you accurate market comparison
+          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray400, marginBottom: '24px' }}>
+            This wasn't in your document, but we need it for accurate analysis
           </p>
 
-          {/* Form */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            {/* Years of Experience */}
-            <div>
-              <label style={{
-                display: 'block',
-                fontFamily: "'Inter', sans-serif",
-                fontSize: '14px',
-                fontWeight: 500,
-                color: COLORS.gray300,
-                marginBottom: '8px',
-              }}>
-                Years of Experience *
-              </label>
-              <input
-                type="number"
-                placeholder="e.g., 4"
-                min="0"
-                max="40"
-                value={userInfo.yearsOfExperience}
-                onChange={(e) => setUserInfo({ ...userInfo, yearsOfExperience: e.target.value })}
-                style={{
-                  width: '100%',
-                  padding: '16px',
-                  background: COLORS.bgCard,
-                  border: `1px solid ${COLORS.border}`,
-                  borderRadius: '10px',
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: '16px',
-                  color: COLORS.white,
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                }}
-              />
-            </div>
+            {missingFields.map((field) => (
+              <div key={field.field}>
+                <label style={{ display: 'block', fontFamily: "'Inter', sans-serif", fontSize: '14px', fontWeight: 500, color: COLORS.gray300, marginBottom: '8px' }}>
+                  {field.label} {field.required && '*'}
+                </label>
+                {field.field === 'collegeTier' ? (
+                  <select
+                    value={userInputs[field.field] || ''}
+                    onChange={(e) => setUserInputs({ ...userInputs, [field.field]: e.target.value })}
+                    style={{
+                      width: '100%',
+                      padding: '16px',
+                      background: COLORS.bgCard,
+                      border: `1px solid ${COLORS.border}`,
+                      borderRadius: '10px',
+                      fontFamily: "'Inter', sans-serif",
+                      fontSize: '16px',
+                      color: userInputs[field.field] ? COLORS.white : COLORS.gray500,
+                      outline: 'none',
+                      cursor: 'pointer',
+                      appearance: 'none',
+                      backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")`,
+                      backgroundRepeat: 'no-repeat',
+                      backgroundPosition: 'right 16px center',
+                    }}
+                  >
+                    <option value="">Select college tier</option>
+                    {colleges.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                  </select>
+                ) : (
+                  <input
+                    type={field.type || 'text'}
+                    placeholder={field.placeholder}
+                    value={userInputs[field.field] || ''}
+                    onChange={(e) => setUserInputs({ ...userInputs, [field.field]: e.target.value })}
+                    style={{
+                      width: '100%',
+                      padding: '16px',
+                      background: COLORS.bgCard,
+                      border: `1px solid ${COLORS.border}`,
+                      borderRadius: '10px',
+                      fontFamily: "'Inter', sans-serif",
+                      fontSize: '16px',
+                      color: COLORS.white,
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                )}
+                {field.reason && (
+                  <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '12px', color: COLORS.gray500, marginTop: '6px' }}>
+                    {field.reason}
+                  </p>
+                )}
+              </div>
+            ))}
 
-            {/* College */}
-            <div>
-              <label style={{
-                display: 'block',
-                fontFamily: "'Inter', sans-serif",
-                fontSize: '14px',
-                fontWeight: 500,
-                color: COLORS.gray300,
-                marginBottom: '8px',
-              }}>
-                College / Institute *
-              </label>
-              <select
-                value={userInfo.college}
-                onChange={(e) => setUserInfo({ ...userInfo, college: e.target.value })}
-                style={{
-                  width: '100%',
-                  padding: '16px',
-                  background: COLORS.bgCard,
-                  border: `1px solid ${COLORS.border}`,
-                  borderRadius: '10px',
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: '16px',
-                  color: userInfo.college ? COLORS.white : COLORS.gray500,
-                  outline: 'none',
-                  cursor: 'pointer',
-                  appearance: 'none',
-                  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")`,
-                  backgroundRepeat: 'no-repeat',
-                  backgroundPosition: 'right 16px center',
-                }}
-              >
-                <option value="">Select your college tier</option>
-                {colleges.map(c => (
-                  <option key={c.value} value={c.value}>{c.label}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Submit */}
             <button
-              onClick={runFullAnalysis}
-              disabled={!userInfo.yearsOfExperience || !userInfo.college}
+              onClick={handleUserInputSubmit}
+              disabled={!canSubmit}
               style={{
                 width: '100%',
                 padding: '18px',
-                background: (userInfo.yearsOfExperience && userInfo.college) ? COLORS.primary : COLORS.bgHover,
+                background: canSubmit ? COLORS.primary : COLORS.bgHover,
                 border: 'none',
                 borderRadius: '10px',
                 fontFamily: "'Inter', sans-serif",
                 fontSize: '16px',
                 fontWeight: 600,
-                color: (userInfo.yearsOfExperience && userInfo.college) ? COLORS.bg : COLORS.gray500,
-                cursor: (userInfo.yearsOfExperience && userInfo.college) ? 'pointer' : 'not-allowed',
-                marginTop: '12px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '10px',
+                color: canSubmit ? COLORS.bg : COLORS.gray500,
+                cursor: canSubmit ? 'pointer' : 'not-allowed',
+                marginTop: '8px',
               }}
             >
-              Analyze My Salary
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M5 12h14M12 5l7 7-7 7"/>
-              </svg>
+              Analyze My Salary →
             </button>
           </div>
         </div>
-
-        <style>{`
-          @keyframes spin {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
-          }
-        `}</style>
       </section>
     );
   }
@@ -807,119 +913,68 @@ RESPOND ONLY WITH VALID JSON.`;
   // ========== ANALYZING STATE ==========
   if (step === 'analyzing') {
     return (
-      <section 
-        id="hero"
-        style={{
-          minHeight: '100vh',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: '120px 24px 80px',
-          background: COLORS.bg,
-        }}
-      >
+      <section id="hero" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '120px 24px', background: COLORS.bg }}>
         <div style={{ textAlign: 'center' }}>
-          <div style={{
-            width: '80px',
-            height: '80px',
-            borderRadius: '50%',
-            border: `3px solid ${COLORS.border}`,
-            borderTopColor: COLORS.primary,
-            margin: '0 auto 32px',
-            animation: 'spin 1s linear infinite',
-          }}/>
-          <h2 style={{
-            fontFamily: "'Space Grotesk', sans-serif",
-            fontSize: '28px',
-            fontWeight: 700,
-            color: COLORS.white,
-            marginBottom: '12px',
-          }}>
-            Analyzing your profile...
+          <div style={{ width: '80px', height: '80px', borderRadius: '50%', border: `3px solid ${COLORS.border}`, borderTopColor: COLORS.primary, margin: '0 auto 32px', animation: 'spin 1s linear infinite' }}/>
+          <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '28px', fontWeight: 700, color: COLORS.white, marginBottom: '12px' }}>
+            Analyzing your compensation...
           </h2>
-          <p style={{
-            fontFamily: "'Inter', sans-serif",
-            fontSize: '16px',
-            color: COLORS.gray400,
-          }}>
-            Comparing against 23,000+ salary data points
+          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '16px', color: COLORS.gray400 }}>
+            Comparing against {extractedData?.country?.name || 'global'} market data
           </p>
         </div>
-
-        <style>{`
-          @keyframes spin {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
-          }
-        `}</style>
+        <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
       </section>
     );
   }
 
   // ========== RESULTS STATE ==========
   if (step === 'results' && analysisResult) {
-    const currentSalary = detectedInfo?.extractedInfo?.salary || 20;
+    const fmt = analysisResult.formattedSalaries || {};
     
     return (
-      <section 
-        id="hero"
-        style={{
-          minHeight: '100vh',
-          padding: '120px 24px 80px',
-          background: COLORS.bg,
-        }}
-      >
+      <section id="hero" style={{ minHeight: '100vh', padding: '120px 24px 80px', background: COLORS.bg }}>
         <div style={{ maxWidth: '900px', margin: '0 auto' }}>
           {/* Header */}
           <div style={{ textAlign: 'center', marginBottom: '48px' }}>
-            <span style={{
-              fontFamily: "'Inter', sans-serif",
-              fontSize: '13px',
-              fontWeight: 600,
-              color: COLORS.primary,
-              textTransform: 'uppercase',
-              letterSpacing: '0.1em',
+            <div style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              background: COLORS.bgCard,
+              padding: '8px 16px',
+              borderRadius: '100px',
+              marginBottom: '16px',
             }}>
-              Analysis Complete
-            </span>
-            <h2 style={{
-              fontFamily: "'Space Grotesk', sans-serif",
-              fontSize: '42px',
-              fontWeight: 700,
-              color: COLORS.white,
-              marginTop: '16px',
-            }}>
+              <img 
+                src={`https://flagcdn.com/24x18/${(analysisResult.country?.code || 'in').toLowerCase()}.png`}
+                alt={analysisResult.country?.name}
+                style={{ borderRadius: '2px' }}
+                onError={(e) => e.target.style.display = 'none'}
+              />
+              <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray300 }}>
+                {analysisResult.country?.name || 'India'} Market Analysis
+              </span>
+            </div>
+            <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '42px', fontWeight: 700, color: COLORS.white }}>
               Your Salary Report
             </h2>
           </div>
 
           {/* Main Result Card */}
-          <div style={{
-            background: COLORS.bgCard,
-            border: `1px solid ${COLORS.border}`,
-            borderRadius: '20px',
-            padding: '40px',
-            marginBottom: '32px',
-          }}>
+          <div style={{ background: COLORS.bgCard, border: `1px solid ${COLORS.border}`, borderRadius: '20px', padding: '40px', marginBottom: '32px' }}>
             {/* Verdict */}
             <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+              <span style={{ fontSize: '48px', marginBottom: '12px', display: 'block' }}>{analysisResult.verdictEmoji}</span>
               <span style={{
                 display: 'inline-block',
-                padding: '10px 24px',
+                padding: '12px 28px',
                 borderRadius: '100px',
                 fontFamily: "'Inter', sans-serif",
-                fontSize: '16px',
+                fontSize: '18px',
                 fontWeight: 600,
-                background: analysisResult.verdict === 'Below Market' 
-                  ? 'rgba(248, 113, 113, 0.15)' 
-                  : analysisResult.verdict === 'Excellent'
-                  ? 'rgba(0, 212, 170, 0.15)'
-                  : 'rgba(251, 191, 36, 0.15)',
-                color: analysisResult.verdict === 'Below Market' 
-                  ? COLORS.coral 
-                  : analysisResult.verdict === 'Excellent'
-                  ? COLORS.primary
-                  : COLORS.amber,
+                background: analysisResult.verdict.includes('Below') ? 'rgba(248, 113, 113, 0.15)' : analysisResult.verdict === 'Excellent' || analysisResult.verdict === 'Above Market' ? 'rgba(0, 212, 170, 0.15)' : 'rgba(251, 191, 36, 0.15)',
+                color: analysisResult.verdict.includes('Below') ? COLORS.coral : analysisResult.verdict === 'Excellent' || analysisResult.verdict === 'Above Market' ? COLORS.primary : COLORS.amber,
               }}>
                 {analysisResult.verdict}
               </span>
@@ -927,22 +982,11 @@ RESPOND ONLY WITH VALID JSON.`;
 
             {/* Percentile */}
             <div style={{ textAlign: 'center', marginBottom: '40px' }}>
-              <div style={{
-                fontFamily: "'Space Grotesk', sans-serif",
-                fontSize: '72px',
-                fontWeight: 700,
-                color: COLORS.white,
-                lineHeight: 1,
-              }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '72px', fontWeight: 700, color: COLORS.white, lineHeight: 1 }}>
                 P{analysisResult.percentile}
               </div>
-              <p style={{
-                fontFamily: "'Inter', sans-serif",
-                fontSize: '16px',
-                color: COLORS.gray400,
-                marginTop: '8px',
-              }}>
-                You earn more than {analysisResult.percentile}% of similar professionals
+              <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '16px', color: COLORS.gray400, marginTop: '8px' }}>
+                You earn more than {analysisResult.percentile}% of similar professionals in {analysisResult.country?.name || 'your region'}
               </p>
             </div>
 
@@ -954,342 +998,118 @@ RESPOND ONLY WITH VALID JSON.`;
                 <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', color: COLORS.gray500 }}>Max</span>
               </div>
               
-              <div style={{
-                position: 'relative',
-                height: '12px',
-                background: `linear-gradient(90deg, ${COLORS.coral}44, ${COLORS.amber}44, ${COLORS.primary}44)`,
-                borderRadius: '6px',
-                marginBottom: '12px',
-              }}>
-                <div style={{
-                  position: 'absolute',
-                  left: `${analysisResult.percentile}%`,
-                  top: '-8px',
-                  transform: 'translateX(-50%)',
-                }}>
-                  <div style={{
-                    width: '28px',
-                    height: '28px',
-                    borderRadius: '50%',
-                    background: COLORS.white,
-                    border: `3px solid ${COLORS.primary}`,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}>
-                    <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '9px', fontWeight: 700, color: COLORS.bg }}>
-                      You
-                    </span>
+              <div style={{ position: 'relative', height: '12px', background: `linear-gradient(90deg, ${COLORS.coral}44, ${COLORS.amber}44, ${COLORS.primary}44)`, borderRadius: '6px', marginBottom: '12px' }}>
+                <div style={{ position: 'absolute', left: `${analysisResult.percentile}%`, top: '-8px', transform: 'translateX(-50%)' }}>
+                  <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: COLORS.white, border: `3px solid ${COLORS.primary}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '9px', fontWeight: 700, color: COLORS.bg }}>You</span>
                   </div>
                 </div>
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '18px', fontWeight: 600, color: COLORS.gray300 }}>
-                  ₹{analysisResult.marketMin}L
-                </span>
-                <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '18px', fontWeight: 600, color: COLORS.primary }}>
-                  ₹{analysisResult.marketMedian}L
-                </span>
-                <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '18px', fontWeight: 600, color: COLORS.gray300 }}>
-                  ₹{analysisResult.marketMax}L
-                </span>
+                <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '18px', fontWeight: 600, color: COLORS.gray300 }}>{fmt.min}</span>
+                <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '18px', fontWeight: 600, color: COLORS.primary }}>{fmt.median}</span>
+                <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '18px', fontWeight: 600, color: COLORS.gray300 }}>{fmt.max}</span>
               </div>
             </div>
 
             {/* Stats */}
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(3, 1fr)',
-              gap: '16px',
-              padding: '24px',
-              background: COLORS.bg,
-              borderRadius: '12px',
-            }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', padding: '24px', background: COLORS.bg, borderRadius: '12px' }}>
               <div style={{ textAlign: 'center' }}>
                 <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', color: COLORS.gray500, marginBottom: '4px' }}>Your Salary</p>
-                <p style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '24px', fontWeight: 600, color: COLORS.white }}>
-                  ₹{currentSalary}L
-                </p>
+                <p style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '24px', fontWeight: 600, color: COLORS.white }}>{fmt.user}</p>
               </div>
               <div style={{ textAlign: 'center' }}>
                 <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', color: COLORS.gray500, marginBottom: '4px' }}>Gap from Median</p>
-                <p style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '24px', fontWeight: 600, color: analysisResult.gap > 0 ? COLORS.coral : COLORS.primary }}>
-                  {analysisResult.gap > 0 ? '-' : '+'}₹{Math.abs(analysisResult.gap)}L
-                </p>
+                <p style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '24px', fontWeight: 600, color: analysisResult.gap > 0 ? COLORS.coral : COLORS.primary }}>{fmt.gap}</p>
               </div>
               <div style={{ textAlign: 'center' }}>
                 <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', color: COLORS.gray500, marginBottom: '4px' }}>Negotiation Potential</p>
-                <p style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '24px', fontWeight: 600, color: COLORS.amber }}>
-                  +₹{analysisResult.negotiationPotential}L
-                </p>
+                <p style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '24px', fontWeight: 600, color: COLORS.amber }}>{fmt.negotiation}</p>
               </div>
             </div>
+
+            {/* Country Context */}
+            {analysisResult.countryContext && (
+              <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray500, textAlign: 'center', marginTop: '24px', fontStyle: 'italic' }}>
+                {analysisResult.countryContext}
+              </p>
+            )}
           </div>
 
           {/* Insights */}
-          <div style={{
-            background: COLORS.bgCard,
-            border: `1px solid ${COLORS.border}`,
-            borderRadius: '16px',
-            padding: '28px',
-            marginBottom: '48px',
-          }}>
-            <h3 style={{
-              fontFamily: "'Inter', sans-serif",
-              fontSize: '16px',
-              fontWeight: 600,
-              color: COLORS.white,
-              marginBottom: '20px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
-            }}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={COLORS.primary} strokeWidth="2">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="12" y1="16" x2="12" y2="12"/>
-                <line x1="12" y1="8" x2="12.01" y2="8"/>
-              </svg>
+          <div style={{ background: COLORS.bgCard, border: `1px solid ${COLORS.border}`, borderRadius: '16px', padding: '28px', marginBottom: '48px' }}>
+            <h3 style={{ fontFamily: "'Inter', sans-serif", fontSize: '16px', fontWeight: 600, color: COLORS.white, marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={COLORS.primary} strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
               Key Insights
             </h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {analysisResult.insights.map((insight, i) => (
-                <div key={i} style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: '12px',
-                  padding: '14px',
-                  background: COLORS.bg,
-                  borderRadius: '10px',
-                }}>
-                  <span style={{
-                    width: '22px',
-                    height: '22px',
-                    borderRadius: '50%',
-                    background: COLORS.primaryMuted,
-                    color: COLORS.primary,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontFamily: "'Inter', sans-serif",
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    flexShrink: 0,
-                  }}>
-                    {i + 1}
-                  </span>
-                  <p style={{
-                    fontFamily: "'Inter', sans-serif",
-                    fontSize: '14px',
-                    color: COLORS.gray300,
-                    lineHeight: 1.5,
-                  }}>
-                    {insight}
-                  </p>
+              {analysisResult.insights?.map((insight, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', padding: '14px', background: COLORS.bg, borderRadius: '10px' }}>
+                  <span style={{ width: '22px', height: '22px', borderRadius: '50%', background: COLORS.primaryMuted, color: COLORS.primary, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'Inter', sans-serif", fontSize: '11px', fontWeight: 600, flexShrink: 0 }}>{i + 1}</span>
+                  <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray300, lineHeight: 1.5 }}>{insight}</p>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* UPSELL SECTION */}
+          {/* UPSELL */}
           <div style={{ marginBottom: '48px' }}>
             <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-              <h3 style={{
-                fontFamily: "'Space Grotesk', sans-serif",
-                fontSize: '28px',
-                fontWeight: 700,
-                color: COLORS.white,
-                marginBottom: '8px',
-              }}>
+              <h3 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '28px', fontWeight: 700, color: COLORS.white, marginBottom: '8px' }}>
                 Ready to close the gap?
               </h3>
-              <p style={{
-                fontFamily: "'Inter', sans-serif",
-                fontSize: '16px',
-                color: COLORS.gray400,
-              }}>
+              <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '16px', color: COLORS.gray400 }}>
                 Get expert help to maximize your compensation
               </p>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
               {/* Salary Negotiation */}
-              <div style={{
-                background: `linear-gradient(135deg, ${COLORS.bgCard} 0%, rgba(0, 212, 170, 0.08) 100%)`,
-                border: `2px solid ${COLORS.primary}`,
-                borderRadius: '20px',
-                padding: '32px',
-                position: 'relative',
-              }}>
-                <span style={{
-                  position: 'absolute',
-                  top: '16px',
-                  right: '16px',
-                  background: COLORS.primary,
-                  color: COLORS.bg,
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: '11px',
-                  fontWeight: 700,
-                  padding: '4px 10px',
-                  borderRadius: '100px',
-                  textTransform: 'uppercase',
-                }}>
-                  Recommended
-                </span>
-
-                <div style={{
-                  width: '56px',
-                  height: '56px',
-                  borderRadius: '14px',
-                  background: COLORS.primaryMuted,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  marginBottom: '20px',
-                }}>
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={COLORS.primary} strokeWidth="1.5">
-                    <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-                    <path d="M2 17l10 5 10-5"/>
-                    <path d="M2 12l10 5 10-5"/>
-                  </svg>
+              <div style={{ background: `linear-gradient(135deg, ${COLORS.bgCard} 0%, rgba(0, 212, 170, 0.08) 100%)`, border: `2px solid ${COLORS.primary}`, borderRadius: '20px', padding: '32px', position: 'relative' }}>
+                <span style={{ position: 'absolute', top: '16px', right: '16px', background: COLORS.primary, color: COLORS.bg, fontFamily: "'Inter', sans-serif", fontSize: '11px', fontWeight: 700, padding: '4px 10px', borderRadius: '100px', textTransform: 'uppercase' }}>Recommended</span>
+                <div style={{ width: '56px', height: '56px', borderRadius: '14px', background: COLORS.primaryMuted, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '20px' }}>
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={COLORS.primary} strokeWidth="1.5"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
                 </div>
-
-                <h4 style={{
-                  fontFamily: "'Space Grotesk', sans-serif",
-                  fontSize: '22px',
-                  fontWeight: 600,
-                  color: COLORS.white,
-                  marginBottom: '8px',
-                }}>
-                  Salary Negotiation Help
-                </h4>
-
-                <p style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: '14px',
-                  color: COLORS.gray400,
-                  marginBottom: '20px',
-                  lineHeight: 1.6,
-                }}>
-                  Personalized scripts & strategies to negotiate confidently without burning bridges.
-                </p>
-
+                <h4 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '22px', fontWeight: 600, color: COLORS.white, marginBottom: '8px' }}>Salary Negotiation Help</h4>
+                <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray400, marginBottom: '20px', lineHeight: 1.6 }}>Personalized scripts & strategies to negotiate confidently.</p>
                 <ul style={{ marginBottom: '24px', padding: 0, listStyle: 'none' }}>
-                  {['Customized negotiation scripts', 'Counter-offer email templates', 'Timing & tactics guide'].map((item, i) => (
+                  {['Customized negotiation scripts', 'Counter-offer templates', 'Timing & tactics guide'].map((item, i) => (
                     <li key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={COLORS.primary} strokeWidth="2">
-                        <polyline points="20 6 9 17 4 12"/>
-                      </svg>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={COLORS.primary} strokeWidth="2"><polyline points="20 6 9 17 4 12"/></svg>
                       <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray300 }}>{item}</span>
                     </li>
                   ))}
                 </ul>
-
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div>
                     <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '32px', fontWeight: 700, color: COLORS.white }}>₹999</span>
                     <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray500, marginLeft: '8px', textDecoration: 'line-through' }}>₹1,999</span>
                   </div>
-                  <button style={{
-                    background: COLORS.primary,
-                    border: 'none',
-                    padding: '14px 24px',
-                    borderRadius: '8px',
-                    fontFamily: "'Inter', sans-serif",
-                    fontSize: '15px',
-                    fontWeight: 600,
-                    color: COLORS.bg,
-                    cursor: 'pointer',
-                  }}>
-                    Get Now →
-                  </button>
+                  <button style={{ background: COLORS.primary, border: 'none', padding: '14px 24px', borderRadius: '8px', fontFamily: "'Inter', sans-serif", fontSize: '15px', fontWeight: 600, color: COLORS.bg, cursor: 'pointer' }}>Get Now →</button>
                 </div>
               </div>
 
               {/* Naukri Pro */}
-              <div style={{
-                background: COLORS.bgCard,
-                border: `1px solid ${COLORS.border}`,
-                borderRadius: '20px',
-                padding: '32px',
-              }}>
-                <div style={{
-                  width: '56px',
-                  height: '56px',
-                  borderRadius: '14px',
-                  background: 'rgba(59, 130, 246, 0.15)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  marginBottom: '20px',
-                }}>
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={COLORS.blue} strokeWidth="1.5">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                    <polyline points="14 2 14 8 20 8"/>
-                    <line x1="12" y1="18" x2="12" y2="12"/>
-                    <line x1="9" y1="15" x2="15" y2="15"/>
-                  </svg>
+              <div style={{ background: COLORS.bgCard, border: `1px solid ${COLORS.border}`, borderRadius: '20px', padding: '32px' }}>
+                <div style={{ width: '56px', height: '56px', borderRadius: '14px', background: 'rgba(59, 130, 246, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '20px' }}>
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={COLORS.blue} strokeWidth="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
                 </div>
-
-                <h4 style={{
-                  fontFamily: "'Space Grotesk', sans-serif",
-                  fontSize: '22px',
-                  fontWeight: 600,
-                  color: COLORS.white,
-                  marginBottom: '8px',
-                }}>
-                  Resume Tips + Naukri Pro
-                </h4>
-
-                <p style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: '14px',
-                  color: COLORS.gray400,
-                  marginBottom: '20px',
-                  lineHeight: 1.6,
-                }}>
-                  Boost profile visibility 3x and get AI-powered resume analysis.
-                </p>
-
+                <h4 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '22px', fontWeight: 600, color: COLORS.white, marginBottom: '8px' }}>Resume Tips + Naukri Pro</h4>
+                <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray400, marginBottom: '20px', lineHeight: 1.6 }}>Boost profile visibility 3x with AI resume analysis.</p>
                 <ul style={{ marginBottom: '24px', padding: 0, listStyle: 'none' }}>
                   {['3x more recruiter views', 'AI resume analysis', 'Priority applications'].map((item, i) => (
                     <li key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={COLORS.blue} strokeWidth="2">
-                        <polyline points="20 6 9 17 4 12"/>
-                      </svg>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={COLORS.blue} strokeWidth="2"><polyline points="20 6 9 17 4 12"/></svg>
                       <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray300 }}>{item}</span>
                     </li>
                   ))}
                 </ul>
-
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '12px', color: COLORS.gray500 }}>Naukri Partner</span>
-                  <a 
-                    href="https://www.naukri.com/naukri360-pro?utmTerm=NPro_Profile&utmContent=ProfileWidget"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{
-                      background: 'transparent',
-                      border: `1px solid ${COLORS.blue}`,
-                      padding: '14px 24px',
-                      borderRadius: '8px',
-                      fontFamily: "'Inter', sans-serif",
-                      fontSize: '15px',
-                      fontWeight: 600,
-                      color: COLORS.blue,
-                      cursor: 'pointer',
-                      textDecoration: 'none',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                    }}
-                  >
+                  <a href="https://www.naukri.com/naukri360-pro?utmTerm=NPro_Profile&utmContent=ProfileWidget" target="_blank" rel="noopener noreferrer" style={{ background: 'transparent', border: `1px solid ${COLORS.blue}`, padding: '14px 24px', borderRadius: '8px', fontFamily: "'Inter', sans-serif", fontSize: '15px', fontWeight: 600, color: COLORS.blue, cursor: 'pointer', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '8px' }}>
                     Explore
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                      <polyline points="15 3 21 3 21 9"/>
-                      <line x1="10" y1="14" x2="21" y2="3"/>
-                    </svg>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
                   </a>
                 </div>
               </div>
@@ -1298,20 +1118,7 @@ RESPOND ONLY WITH VALID JSON.`;
 
           {/* Check Another */}
           <div style={{ textAlign: 'center' }}>
-            <button
-              onClick={resetFlow}
-              style={{
-                background: 'transparent',
-                border: `1px solid ${COLORS.borderLight}`,
-                padding: '14px 28px',
-                borderRadius: '8px',
-                fontFamily: "'Inter', sans-serif",
-                fontSize: '15px',
-                fontWeight: 500,
-                color: COLORS.gray400,
-                cursor: 'pointer',
-              }}
-            >
+            <button onClick={resetFlow} style={{ background: 'transparent', border: `1px solid ${COLORS.borderLight}`, padding: '14px 28px', borderRadius: '8px', fontFamily: "'Inter', sans-serif", fontSize: '15px', fontWeight: 500, color: COLORS.gray400, cursor: 'pointer' }}>
               Check another document
             </button>
           </div>
@@ -1329,66 +1136,32 @@ RESPOND ONLY WITH VALID JSON.`;
 
 const ExamplesSection = () => {
   const examples = [
-    {
-      type: 'Offer Letter',
-      role: 'SDE-2 @ Amazon',
-      location: 'Bangalore',
-      offered: '₹45 LPA',
-      market: '₹42-58 LPA',
-      percentile: 65,
-      verdict: 'Fair offer',
-      verdictColor: COLORS.primary,
-    },
-    {
-      type: 'Salary Slip',
-      role: 'Product Manager @ Startup',
-      location: 'Mumbai',
-      offered: '₹28 LPA',
-      market: '₹32-48 LPA',
-      percentile: 32,
-      verdict: 'Below market',
-      verdictColor: COLORS.coral,
-    },
-    {
-      type: 'Resume',
-      role: 'Data Scientist',
-      location: 'Hyderabad',
-      offered: '3 yrs exp',
-      market: '₹25-38 LPA',
-      percentile: null,
-      verdict: 'High potential',
-      verdictColor: COLORS.amber,
-    },
+    { type: 'Offer Letter', role: 'SDE-2 @ Amazon', location: 'Bangalore, India', offered: '₹45 LPA', market: '₹42-58 LPA', percentile: 65, verdict: 'Fair offer', verdictColor: COLORS.primary },
+    { type: 'Salary Slip', role: 'Software Engineer @ Google', location: 'California, USA', offered: '$185K', market: '$165-220K', percentile: 58, verdict: 'Fair', verdictColor: COLORS.amber },
+    { type: 'Resume', role: 'Product Manager', location: 'London, UK', offered: '5 yrs exp', market: '£75-110K', percentile: null, verdict: 'High potential', verdictColor: COLORS.primary },
   ];
 
   return (
     <section id="examples" style={{ padding: '100px 24px', background: COLORS.bgCard, borderTop: `1px solid ${COLORS.border}` }}>
       <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
         <div style={{ textAlign: 'center', marginBottom: '56px' }}>
-          <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 600, color: COLORS.primary, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-            Real Results
-          </span>
-          <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '36px', fontWeight: 700, color: COLORS.white, marginTop: '12px' }}>
-            See what others discovered
-          </h2>
+          <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 600, color: COLORS.primary, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Global Results</span>
+          <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '36px', fontWeight: 700, color: COLORS.white, marginTop: '12px' }}>See what others discovered</h2>
         </div>
-
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
           {examples.map((item, i) => (
             <div key={i} style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}`, borderRadius: '14px', padding: '24px' }}>
-              <span style={{ display: 'inline-block', background: COLORS.bgHover, padding: '5px 10px', borderRadius: '5px', fontFamily: "'Inter', sans-serif", fontSize: '12px', color: COLORS.gray400, marginBottom: '14px' }}>
-                {item.type}
-              </span>
+              <span style={{ display: 'inline-block', background: COLORS.bgHover, padding: '5px 10px', borderRadius: '5px', fontFamily: "'Inter', sans-serif", fontSize: '12px', color: COLORS.gray400, marginBottom: '14px' }}>{item.type}</span>
               <h4 style={{ fontFamily: "'Inter', sans-serif", fontSize: '15px', fontWeight: 600, color: COLORS.white, marginBottom: '4px' }}>{item.role}</h4>
               <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', color: COLORS.gray500, marginBottom: '16px' }}>{item.location}</p>
               <div style={{ height: '1px', background: COLORS.border, marginBottom: '16px' }}/>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
                 <div>
-                  <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '11px', color: COLORS.gray500, marginBottom: '2px' }}>{item.percentile !== null ? 'Offered' : 'Experience'}</p>
+                  <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '11px', color: COLORS.gray500, marginBottom: '2px' }}>{item.percentile !== null ? 'Salary' : 'Experience'}</p>
                   <p style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '16px', fontWeight: 600, color: COLORS.white }}>{item.offered}</p>
                 </div>
                 <div>
-                  <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '11px', color: COLORS.gray500, marginBottom: '2px' }}>Market</p>
+                  <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '11px', color: COLORS.gray500, marginBottom: '2px' }}>Market Range</p>
                   <p style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '16px', fontWeight: 600, color: COLORS.primary }}>{item.market}</p>
                 </div>
               </div>
@@ -1410,30 +1183,23 @@ const ExamplesSection = () => {
 
 const HowItWorksSection = () => {
   const steps = [
-    { num: '01', title: 'Upload', desc: 'Drop any document — we auto-detect the type', icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={COLORS.primary} strokeWidth="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> },
-    { num: '02', title: 'Analyze', desc: 'AI extracts info & compares to 23K+ profiles', icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={COLORS.primary} strokeWidth="1.5"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg> },
-    { num: '03', title: 'Discover', desc: 'See your percentile & actionable next steps', icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={COLORS.primary} strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg> },
+    { num: '01', title: 'Upload', desc: 'Drop any document — AI auto-detects type & country', icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={COLORS.primary} strokeWidth="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> },
+    { num: '02', title: 'Extract', desc: 'AI pulls salary, role, experience from your doc', icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={COLORS.primary} strokeWidth="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> },
+    { num: '03', title: 'Analyze', desc: 'Compare against global market data for your country', icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={COLORS.primary} strokeWidth="1.5"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg> },
   ];
 
   return (
     <section id="how-it-works" style={{ padding: '100px 24px', background: COLORS.bg, borderTop: `1px solid ${COLORS.border}` }}>
       <div style={{ maxWidth: '800px', margin: '0 auto' }}>
         <div style={{ textAlign: 'center', marginBottom: '56px' }}>
-          <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 600, color: COLORS.primary, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-            Simple Process
-          </span>
-          <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '36px', fontWeight: 700, color: COLORS.white, marginTop: '12px' }}>
-            How it works
-          </h2>
+          <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 600, color: COLORS.primary, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Smart Process</span>
+          <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '36px', fontWeight: 700, color: COLORS.white, marginTop: '12px' }}>How it works</h2>
         </div>
-
         <div style={{ display: 'flex', justifyContent: 'space-between', position: 'relative' }}>
           <div style={{ position: 'absolute', top: '36px', left: '18%', right: '18%', height: '2px', background: `linear-gradient(90deg, ${COLORS.primary}, ${COLORS.border}, ${COLORS.primary})` }}/>
           {steps.map((step, i) => (
             <div key={i} style={{ textAlign: 'center', flex: 1, position: 'relative', zIndex: 1 }}>
-              <div style={{ width: '72px', height: '72px', borderRadius: '50%', background: COLORS.bgCard, border: `2px solid ${COLORS.primary}`, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
-                {step.icon}
-              </div>
+              <div style={{ width: '72px', height: '72px', borderRadius: '50%', background: COLORS.bgCard, border: `2px solid ${COLORS.primary}`, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>{step.icon}</div>
               <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '11px', fontWeight: 600, color: COLORS.primary, letterSpacing: '0.1em' }}>STEP {step.num}</span>
               <h4 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '18px', fontWeight: 600, color: COLORS.white, margin: '10px 0 6px' }}>{step.title}</h4>
               <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', color: COLORS.gray500, maxWidth: '160px', margin: '0 auto', lineHeight: 1.5 }}>{step.desc}</p>
@@ -1452,9 +1218,7 @@ const HowItWorksSection = () => {
 const Footer = () => (
   <footer style={{ padding: '40px 24px', background: COLORS.bg, borderTop: `1px solid ${COLORS.border}` }}>
     <div style={{ maxWidth: '1200px', margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-      <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray500 }}>
-        © 2025 AreYouPaidFairly. Made for Indian professionals.
-      </p>
+      <p style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray500 }}>© 2025 AreYouPaidFairly. Works globally.</p>
       <div style={{ display: 'flex', gap: '24px' }}>
         {['Privacy', 'Terms', 'Contact'].map((link) => (
           <a key={link} href="#" style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: COLORS.gray500, textDecoration: 'none' }}>{link}</a>
