@@ -361,6 +361,7 @@ const StatsBanner = () => {
 // ============================================
 
 const HeroWithUpload = ({ onAnalysisComplete }) => {
+  const [selectedCurrency, setSelectedCurrency] = useState('IN'); 
   const [dragActive, setDragActive] = useState(false);
   const [uploadedFile, setUploadedFile] = useState(null);
   const [isDetecting, setIsDetecting] = useState(false);
@@ -1109,7 +1110,6 @@ Common patterns:
 const AnalysisResults = ({ profileData }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [analysisData, setAnalysisData] = useState(null);
-  const [showPaymentModal, setShowPaymentModal] = useState(false);
 
   const { detectedInfo, userInfo } = profileData;
   const countryInfo = COUNTRIES[detectedInfo?.country] || COUNTRIES.IN;
@@ -1122,6 +1122,7 @@ const AnalysisResults = ({ profileData }) => {
 
   const runAnalysis = async () => {
     setIsLoading(true);
+    await new Promise(resolve => setTimeout(resolve, 5000));
 
     const collegeLabels = {
       'iit': 'IIT',
@@ -1542,7 +1543,7 @@ RESPOND ONLY WITH VALID JSON.`;
       e.currentTarget.style.borderColor = COLORS.border;
       e.currentTarget.style.boxShadow = 'none';
     }}
-    onClick={() => setShowPaymentModal(true)}>
+    onClick={() => alert('Subscription launching soon!')}>
       <div style={{ fontSize: '48px', marginBottom: '16px' }}>💰</div>
       <h4 style={{
         fontFamily: TYPOGRAPHY.display,
@@ -1882,12 +1883,6 @@ RESPOND ONLY WITH VALID JSON.`;
 // ============================================
 // PAYMENT MODAL WITH RAZORPAY
 // ============================================
-
-const PaymentModal = ({ amount, countryInfo, onClose, onSuccess }) => {
-  const [isProcessing, setIsProcessing] = useState(false);
-
-  const handlePayment = () => {
-    setIsProcessing(true);
 
     // Initialize Razorpay
     const options = {
